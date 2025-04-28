@@ -1,0 +1,10 @@
+let Endpoint = < production | development > in
+{
+	apns_p8 = ./AuthKey_KEY.p8 as Text,
+	kid = "KEY_ID",
+	team_id = "TEAM_ID",
+	endpoint = Endpoint.development,
+	jid = "apns@example.com",
+	password = "jid password",
+	listen = "127.0.0.1:3000"
+}

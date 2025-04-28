@@ -1,0 +1,18 @@
+[package]
+name = "snikket-apns"
+version = "0.1.0"
+edition = "2018"
+rust-version = "1.63"
+
+[dependencies]
+a2 = "0.8.1"
+tokio-xmpp = "3.5.0"
+xmpp-parsers = "*"
+serde_dhall = "0.12.1"
+serde = "*"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+futures-util = "*"
+url = "2.5.4"
+prometheus-client = "0.23.1"
+git-version = "0.3.9"
+axum = "0.6.0"
