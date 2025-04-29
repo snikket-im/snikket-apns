@@ -13,7 +13,7 @@ use std::env;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::signal::ctrl_c;
-use tokio_xmpp::BareJid;
+use tokio_xmpp::{BareJid, Jid};
 use url::Url;
 
 const VERSION: &str = git_version::git_version!();
@@ -175,13 +175,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 										);
 									data.map(|dat| payload.add_custom_data("rfc8291", &dat));
 									// TODO: Do not send more notifications with tokens that return Unregistered, BadDeviceToken or DeviceTokenNotForTopic.
-									// TODO: send back <message type="error"> on failure
 									match apns.send(payload).await {
 										Ok(_) => {
 											apns_success.inc();
 										}
 										Err(a2::Error::ResponseError(r)) => {
 											println!("Error from APNS: {:?}", &r);
+											client.send_stanza(
+												xmpp_parsers::message::Message::error(stanza.attr("from").and_then(|s| Jid::new(s).ok()))
+												.with_payload(xmpp_parsers::stanza_error::StanzaError::new(
+													xmpp_parsers::stanza_error::ErrorType::Cancel,
+													xmpp_parsers::stanza_error::DefinedCondition::ServiceUnavailable,
+													"en",
+													format!("Got error response from APNS: {:?}", &r)
+												)).into()
+											).await?;
 											apns_failure.get_or_create(&vec![
 												("code", r.code.to_string()),
 												("reason", r.error.map(|err| err.reason.to_string()).unwrap_or("None".to_string()))
@@ -189,6 +197,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 										}
 										Err(err) => {
 											println!("Could not send: {:?}", &err);
+											client.send_stanza(
+												xmpp_parsers::message::Message::error(stanza.attr("from").and_then(|s| Jid::new(s).ok()))
+												.with_payload(xmpp_parsers::stanza_error::StanzaError::new(
+													xmpp_parsers::stanza_error::ErrorType::Cancel,
+													xmpp_parsers::stanza_error::DefinedCondition::ServiceUnavailable,
+													"en",
+													format!("Got error sending to APNS: {:?}", &err)
+												)).into()
+											).await?;
 											apns_failure.get_or_create(&vec![
 												("reason", err.to_string())
 											]).inc();
