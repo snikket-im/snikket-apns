@@ -14,45 +14,25 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::signal::ctrl_c;
 use tokio_xmpp::{BareJid, Jid};
-use url::Url;
+use url::{Url, Host};
 
 const VERSION: &str = git_version::git_version!();
 
 #[derive(Deserialize)]
+struct EndpointConfig {
+	p8: String,
+	kid: String
+}
+
+#[derive(Deserialize)]
 struct Config {
-	apns_p8: String,
-	kid: String,
+	dev: EndpointConfig,
+	prod: EndpointConfig,
 	team_id: String,
-	#[serde(deserialize_with = "deserialize_endpoint")]
-	endpoint: Endpoint,
 	#[serde(deserialize_with = "deserialize_jid")]
 	jid: BareJid,
 	password: String,
 	listen: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum EndpointConfig {
-	Production,
-	Development,
-}
-
-impl From<EndpointConfig> for Endpoint {
-	fn from(repr: EndpointConfig) -> Self {
-		match repr {
-			EndpointConfig::Production => Endpoint::Production,
-			EndpointConfig::Development => Endpoint::Sandbox,
-		}
-	}
-}
-
-fn deserialize_endpoint<'de, D>(deserializer: D) -> Result<Endpoint, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	let repr = EndpointConfig::deserialize(deserializer)?;
-	Ok(repr.into())
 }
 
 fn deserialize_jid<'de, D>(deserializer: D) -> Result<BareJid, D::Error>
@@ -116,11 +96,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		apns_failure.clone(),
 	);
 
-	let apns = Client::token(
-		std::io::Cursor::new(config.apns_p8),
-		config.kid,
+	let dev_client = Client::token(
+		std::io::Cursor::new(config.dev.p8),
+		config.dev.kid,
+		config.team_id.clone(),
+		Endpoint::Sandbox,
+	)?;
+
+	let prod_client = Client::token(
+		std::io::Cursor::new(config.prod.p8),
+		config.prod.kid,
 		config.team_id,
-		config.endpoint,
+		Endpoint::Production,
 	)?;
 
 	let mut client = tokio_xmpp::AsyncClient::new(config.jid, config.password);
@@ -157,8 +144,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 									encrypted.children().find(|el| el.is("payload", "urn:xmpp:sce:rfc8291:0")).map(|el| el.text())
 								);
 								let voip = notif.children().find(|el| el.is("voip", "urn:xmpp:push2:0")).is_some();
+								let mut topic_and_voip_token = url.fragment().unwrap_or("").split("&");
+								let topic = topic_and_voip_token.next();
+								let voip_token = topic_and_voip_token.next();
 
-								if let Some(device_token) = url.path_segments().and_then(|segs| segs.last()) {
+								let apns = if url.host() == Some(Host::Domain("api.development.push.apple.com")) {
+									&dev_client
+								} else {
+									&prod_client
+								};
+
+								let wrapped_token = if voip {
+									voip_token
+								} else {
+									url.path_segments().and_then(|segs| segs.last())
+								};
+
+								let final_topic = if voip {
+									topic.map(|base| base.to_owned() + ".voip")
+								} else {
+									topic.map(|base| base.to_owned())
+								};
+
+								if let Some(device_token) = wrapped_token {
 									let mut payload = DefaultNotificationBuilder::new()
 										.set_title("New Message")
 										.set_mutable_content()
@@ -168,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 												apns_id: stanza.attr("id"),
 												apns_collapse_id: None,
 												apns_expiration: None,
-												apns_topic: url.fragment(),
+												apns_topic: final_topic.as_deref(),
 												apns_push_type: Some(if voip { PushType::Voip } else { PushType::Alert }),
 												apns_priority: priority.map(apns_priority)
 											}
